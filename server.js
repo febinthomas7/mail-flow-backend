@@ -28,7 +28,7 @@ app.post("/api/send-email", async (req, res) => {
   const transporter = nodemailer.createTransport({
     host: smtpConfig.host || "smtp.gmail.com",
     port: smtpConfig.port || 587,
-    secure: smtpConfig.port === 465, // true for 465, false for other ports
+    secure: false, // true for 465, false for other ports
     auth: {
       user: smtpConfig.username,
       pass: smtpConfig.password,
