@@ -45,6 +45,7 @@ app.post("/api/send-email", async (req, res) => {
       to: mailOptions.to,
       subject: mailOptions.subject,
       text: mailOptions.text,
+      html: mailOptions.html,
       attachments: mailOptions.attachments
         ? mailOptions.attachments.map((att) => ({
             filename: att.filename,
@@ -78,7 +79,6 @@ app.post("/api/send-email", async (req, res) => {
   }
 });
 
-
 /**
  * SMTP Verification Endpoint
  * Checks if the credentials are valid without sending an email.
@@ -96,13 +96,13 @@ app.post("/api/verify-smtp", async (req, res) => {
   const transporter = nodemailer.createTransport({
     host: smtpConfig.host || "smtp.gmail.com",
     port: smtpConfig.port || 587,
-    secure: false, 
+    secure: false,
     auth: {
       user: smtpConfig.username,
       pass: smtpConfig.password,
     },
     // Interaction timeout to prevent hanging on bad proxies
-    connectionTimeout: 10000, 
+    connectionTimeout: 10000,
     greetingTimeout: 10000,
   });
 
@@ -111,14 +111,14 @@ app.post("/api/verify-smtp", async (req, res) => {
     await transporter.verify();
 
     console.log(`[VERIFY_SUCCESS] Account: ${smtpConfig.username} is VALID.`);
-    
+
     res.status(200).json({
       success: true,
       message: "Connection established successfully.",
     });
   } catch (error) {
     console.error(
-      `[VERIFY_FAIL] Account: ${smtpConfig.username} -> ${error.message}`
+      `[VERIFY_FAIL] Account: ${smtpConfig.username} -> ${error.message}`,
     );
 
     res.status(401).json({
@@ -127,7 +127,6 @@ app.post("/api/verify-smtp", async (req, res) => {
     });
   }
 });
-
 
 app.listen(PORT, () => {
   console.log(`
