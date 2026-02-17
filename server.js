@@ -10,6 +10,57 @@ app.use(cors());
 // Increased limit for large PDF attachments
 app.use(express.json({ limit: "50mb" }));
 
+const emailValidator = require('deep-email-validator');
+
+// --- NEW TARGET VERIFICATION ROUTE ---
+app.post("/api/verify-target", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ success: false, error: "Email is required" });
+  }
+
+  try {
+    // Validate the email
+    const { valid, reason, validators } = await emailValidator.validate({
+      email: email,
+      validateRegex: true,
+      validateMx: true,
+      validateTypo: true,
+      validateDisposable: true,
+      validateSMTP: true, // Needs Port 25 open to work fully
+    });
+
+    if (valid) {
+      return res.status(200).json({ 
+        success: true, 
+        status: "valid",
+        details: validators 
+      });
+    }
+
+    // Handle Invalid
+    let errorMsg = reason;
+    if (reason === 'smtp') errorMsg = "Mailbox not found";
+    if (reason === 'mx') errorMsg = "No mail server";
+    if (reason === 'disposable') errorMsg = "Disposable email";
+    if (reason === 'typo') errorMsg = "Typo detected";
+    
+    return res.status(200).json({ 
+      success: true,
+      status: "invalid", 
+      error: errorMsg,
+      details: validators
+    });
+
+  } catch (error) {
+    console.error(`[VERIFY_ERROR] ${email} -> ${error.message}`);
+    return res.status(500).json({ success: false, error: "Server error" });
+  }
+});
+
+// ... rest of your server code ...
+
 /**
  * Professional SMTP Gateway Endpoint
  * Receives credentials and payload, dispatches via Nodemailer.
