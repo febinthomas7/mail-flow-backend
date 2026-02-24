@@ -1,5 +1,6 @@
 const { SESClient, GetIdentityVerificationAttributesCommand } = require("@aws-sdk/client-ses");
 const nodemailer = require("nodemailer");
+const pLimit = require('p-limit'); // --- NEW: Required for socket control
 
 // Initialize SES Client
 const sesClient = new SESClient({ 
@@ -10,12 +11,16 @@ const sesClient = new SESClient({
     }
 });
 
+// --- NEW: Limit SMTP TCP connections to 5 at a time
+// Opening network sockets is heavy; 5 is a safe number for concurrent handshakes.
+const limitSmtp = pLimit(5); 
+
 /**
  * 1. Parallel SMTP Verification (Batch)
  * Expects an array of smtpConfigs in req.body.configs
  */
 exports.verifySmtpBatch = async (req, res) => {
-    const { configs } = req.body; // Array of SMTP config objects
+    const { configs } = req.body; 
 
     if (!configs || !Array.isArray(configs)) {
         return res.status(400).json({ success: false, error: "Provide an array of SMTP configurations." });
@@ -28,7 +33,7 @@ exports.verifySmtpBatch = async (req, res) => {
             port: config.port || 587,
             secure: config.port === 465,
             auth: { user: config.username, pass: config.password },
-            connectionTimeout: 5000, // Short timeout for speed
+            connectionTimeout: 5000, 
         });
 
         try {
@@ -36,14 +41,22 @@ exports.verifySmtpBatch = async (req, res) => {
             return { user: config.username, status: "valid" };
         } catch (err) {
             return { user: config.username, status: "invalid", error: err.message };
+        } finally {
+            // --- UPDATED: CRITICAL MEMORY FIX ---
+            // Force the socket to close immediately after checking. 
+            // Prevents connection leaks that slowly choke the server.
+            transporter.close(); 
         }
     };
 
     try {
-        // Parallel execution
-        const results = await Promise.allSettled(configs.map(config => checkSingleSmtp(config)));
+        // --- UPDATED: Controlled parallel execution ---
+        const tasks = configs.map(config => limitSmtp(() => checkSingleSmtp(config)));
+        const results = await Promise.allSettled(tasks);
         
-        const summary = results.map(res => res.value);
+        // Safely extract values, handling potential Promise rejections just in case
+        const summary = results.map(res => res.status === 'fulfilled' ? res.value : { error: res.reason });
+        
         res.status(200).json({ success: true, results: summary });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -55,22 +68,33 @@ exports.verifySmtpBatch = async (req, res) => {
  * Checks if the provided emails/domains are verified in your AWS SES account.
  */
 exports.verifyTargetWithSES = async (req, res) => {
-    const { emails } = req.body; // Array of emails to check status for
+    const { emails } = req.body; 
 
     if (!emails || !Array.isArray(emails)) {
         return res.status(400).json({ success: false, error: "Emails array is required." });
     }
 
-    const params = { Identities: emails };
-
     try {
-        const command = new GetIdentityVerificationAttributesCommand(params);
-        const response = await sesClient.send(command);
+        // --- UPDATED: AWS API Limit Handling ---
+        // AWS strictly limits 'Identities' to 100 items per request.
+        const CHUNK_SIZE = 100;
+        let allVerificationData = {};
+
+        // Loop through the array 100 items at a time
+        for (let i = 0; i < emails.length; i += CHUNK_SIZE) {
+            const chunk = emails.slice(i, i + CHUNK_SIZE);
+            const params = { Identities: chunk };
+            
+            const command = new GetIdentityVerificationAttributesCommand(params);
+            const response = await sesClient.send(command);
+            
+            // Merge the chunk's results into our master object
+            allVerificationData = { ...allVerificationData, ...response.VerificationAttributes };
+        }
         
-        // AWS returns an object where keys are the emails
         res.status(200).json({ 
             success: true, 
-            verificationData: response.VerificationAttributes 
+            verificationData: allVerificationData 
         });
     } catch (error) {
         console.error("[SES_VERIFY_ERROR]", error);

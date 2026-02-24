@@ -1,54 +1,158 @@
-const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
+const { SESClient, SendRawEmailCommand } = require("@aws-sdk/client-ses");
+const MailComposer = require("nodemailer/lib/mail-composer");
+const pLimit = require('p-limit'); 
+const { injectData, generateBuffer } = require("../utils/generate");
+const { createTags } = require("../utils/tags");
 
-// Initialize SES Client
-// Note: In production, use environment variables (process.env.AWS_ACCESS_KEY_ID, etc.)
-// AWS SDK will automatically pick them up if they are in your .env file
-const sesClient = new SESClient({ 
-    region: process.env.AWS_REGION || "us-east-1",
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+// Set concurrency limit: Only 10 emails process at exactly the same time.
+const limit = pLimit(10); 
+
+// --- SES Client Cache ---
+// Prevents memory leaks by reusing clients instead of creating 20,000 of them.
+const sesClientCache = {};
+
+const getSesClient = (currentSmtp) => {
+    const cacheKey = currentSmtp.accessKeyId;
+    if (!sesClientCache[cacheKey]) {
+        sesClientCache[cacheKey] = new SESClient({ 
+            region: currentSmtp.region || "us-east-1",
+            credentials: {
+                accessKeyId: currentSmtp.accessKeyId,
+                secretAccessKey: currentSmtp.secretAccessKey
+            }
+        });
     }
-});
+    return sesClientCache[cacheKey];
+};
 
-exports.sendEmail = async (req, res) => {
-    const { smtpConfig, mailOptions } = req.body;
+// --- Delay Helper ---
+// Helps prevent AWS "ThrottlingException" by pausing slightly between chunks.
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Validation
-    if (!mailOptions || !mailOptions.to || !mailOptions.subject) {
-        return res.status(400).json({ success: false, error: "MISSING_PAYLOAD" });
-    }
+/**
+ * HELPER: Handles the logic for ONE specific email.
+ * This is called by the queue.
+ */
+const sendSingleEmail = async (targetEmail, index, payload) => {
+    const { smtpConfigs, subjects, senderNames, generationOptions } = payload;
 
-    const params = {
-        Source: `"${smtpConfig.name || "MailFlow"}" <${smtpConfig.email}>`, // Must be verified in SES
-        Destination: {
-            ToAddresses: Array.isArray(mailOptions.to) ? mailOptions.to : [mailOptions.to],
-        },
-        Message: {
-            Subject: { Data: mailOptions.subject },
-            Body: {
-                Html: { Data: mailOptions.html || "" },
-                Text: { Data: mailOptions.text || "" },
-            },
-        },
-        // List-Unsubscribe and custom headers are handled differently in standard SendEmail.
-        // For complex headers or attachments, you would typically use SendRawEmail.
-    };
+    // 1. ROTATION LOGIC (Modulo)
+    const currentSmtp = smtpConfigs[index % smtpConfigs.length];
+    const currentSubject = subjects[index % subjects.length];
+    const currentSenderName = senderNames[index % senderNames.length];
 
     try {
-        const command = new SendEmailCommand(params);
-        const data = await sesClient.send(command);
+        const sesClient = getSesClient(currentSmtp);
 
-        console.log(`[SES_SUCCESS] MessageId: ${data.MessageId}`);
-        res.status(200).json({ 
-            success: true, 
-            messageId: data.MessageId 
+        let finalHtml = "";
+        let attachments = [];
+        let emailBody = "";
+
+        // 2. DYNAMIC TAGS & INJECTION
+        if (generationOptions && generationOptions.html) {
+            const enrichedData = createTags({
+                name: generationOptions.receiverNames ? generationOptions.receiverNames[index % generationOptions.receiverNames.length] : "Customer",
+                email: targetEmail,
+                invoice: generationOptions.invoices ? generationOptions.invoices[index % generationOptions.invoices.length] : null,
+                customData: generationOptions.data
+            });
+
+            finalHtml = injectData(generationOptions.html, enrichedData);
+
+            // 3. FORMAT LOGIC
+            if (generationOptions.format === 'html') {
+                emailBody = finalHtml;
+            } else {
+                const fileBuffer = await generateBuffer(finalHtml, generationOptions.format);
+                attachments.push({
+                    filename: `${enrichedData.invoice}.${generationOptions.format}`,
+                    content: fileBuffer,
+                });
+                emailBody = "Please find your document attached.";
+            }
+        }
+
+        // 4. COMPOSE & SEND
+        const mail = new MailComposer({
+            from: `"${currentSenderName}" <${currentSmtp.email}>`,
+            to: targetEmail,
+            subject: currentSubject,
+            html: emailBody,
+            attachments: attachments
         });
+
+        const compiledMessage = await mail.compile().build();
+        const command = new SendRawEmailCommand({ RawMessage: { Data: compiledMessage } });
+        const result = await sesClient.send(command);
+
+        return { email: targetEmail, status: "sent", messageId: result.MessageId };
+
     } catch (error) {
-        console.error(`[SES_ERROR]`, error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+        return { email: targetEmail, status: "failed", error: error.message };
     }
+};
+
+/**
+ * MAIN EXPORT: The API endpoint that receives the 20k list.
+ */
+exports.sendEmail = async (req, res) => {
+    const { targets, ...rest } = req.body;
+
+    if (!targets || !Array.isArray(targets)) {
+        return res.status(400).json({ success: false, error: "Targets array is required." });
+    }
+
+    // --- NEW: INSTANT RESPONSE (Fire and Forget) ---
+    // Respond to the client immediately with a 202 (Accepted) status.
+    // This prevents browser and server timeouts.
+    res.status(202).json({ 
+        success: true, 
+        message: "Batch processing initiated. Emails are sending in the background.", 
+        total: targets.length
+    });
+
+    // --- NEW: BACKGROUND WORKER ---
+    // This self-executing function runs asynchronously without blocking the API response.
+    (async () => {
+        try {
+            console.log(`[BACKGROUND JOB] Starting email blast for ${targets.length} targets...`);
+            
+            const finalReport = [];
+            const chunkSize = 500; 
+            
+            for (let i = 0; i < targets.length; i += chunkSize) {
+                const chunk = targets.slice(i, i + chunkSize);
+                
+                const tasks = chunk.map((targetEmail, chunkIndex) => {
+                    const absoluteIndex = i + chunkIndex; 
+                    return limit(() => sendSingleEmail(targetEmail, absoluteIndex, rest));
+                });
+
+                // Wait for the current chunk to finish
+                const results = await Promise.allSettled(tasks);
+                
+                // Process results
+                results.forEach((result) => {
+                    finalReport.push(
+                        result.status === 'fulfilled' ? result.value : { status: "error", error: result.reason }
+                    );
+                });
+
+                // Add a small 1-second delay between chunks to let AWS breathe
+                if (i + chunkSize < targets.length) {
+                    await delay(1000); 
+                }
+            }
+
+            console.log(`[BACKGROUND JOB] Finished processing ${targets.length} emails.`);
+            
+            // --- TODO: SAVE REPORT ---
+            // Because we already sent the HTTP response, you must save the finalReport 
+            // to your database here so the user can view it later in their dashboard.
+            // Example: await db.collection('campaigns').updateOne({ _id: campaignId }, { $set: { report: finalReport, status: 'Completed' }});
+
+        } catch (backgroundError) {
+            console.error("[BACKGROUND JOB ERROR] Email queue failed:", backgroundError.message);
+        }
+    })(); 
 };
