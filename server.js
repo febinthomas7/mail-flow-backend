@@ -10,7 +10,7 @@ app.use(cors());
 // Increased limit for large PDF attachments
 app.use(express.json({ limit: "50mb" }));
 
-const emailValidator = require('deep-email-validator');
+const emailValidator = require("deep-email-validator");
 
 // --- NEW TARGET VERIFICATION ROUTE ---
 app.post("/api/verify-target", async (req, res) => {
@@ -32,27 +32,26 @@ app.post("/api/verify-target", async (req, res) => {
     });
 
     if (valid) {
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         status: "valid",
-        details: validators 
+        details: validators,
       });
     }
 
     // Handle Invalid
     let errorMsg = reason;
-    if (reason === 'smtp') errorMsg = "Mailbox not found";
-    if (reason === 'mx') errorMsg = "No mail server";
-    if (reason === 'disposable') errorMsg = "Disposable email";
-    if (reason === 'typo') errorMsg = "Typo detected";
-    
-    return res.status(200).json({ 
-      success: true,
-      status: "invalid", 
-      error: errorMsg,
-      details: validators
-    });
+    if (reason === "smtp") errorMsg = "Mailbox not found";
+    if (reason === "mx") errorMsg = "No mail server";
+    if (reason === "disposable") errorMsg = "Disposable email";
+    if (reason === "typo") errorMsg = "Typo detected";
 
+    return res.status(200).json({
+      success: true,
+      status: "invalid",
+      error: errorMsg,
+      details: validators,
+    });
   } catch (error) {
     console.error(`[VERIFY_ERROR] ${email} -> ${error.message}`);
     return res.status(500).json({ success: false, error: "Server error" });
