@@ -1,8 +1,11 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const verifyController = require('../controllers/verify');
+const {
+  verifyTargetWithSES,
+  verifySmtpBatch,
+} = require("../controllers/verify");
 
-router.post('/target', verifyController.verifyTargetWithSES);
-router.post('/smtp', verifyController.verifySmtpBatch);
+router.post("/target", verifyTargetWithSES);
+router.post("/smtp", verifySmtpBatch);
 
 module.exports = router;
