@@ -1,13 +1,13 @@
 const express = require("express");
-const nodemailer = require("nodemailer");
 const cors = require("cors");
+const verifyRoutes = require("./route/varify");
+const emailRoutes = require("./route/email");
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
-// Enable CORS for frontend interaction
+// Middleware
 app.use(cors());
-// Increased limit for large PDF attachments
 app.use(express.json({ limit: "50mb" }));
 
 const emailValidator = require("deep-email-validator");
@@ -180,10 +180,10 @@ app.post("/api/verify-smtp", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`
-  ==============================================
-  MAILFLOW PRO BACKEND STARTED
-  Port: ${PORT}
-  Status: READY FOR RELAY
-  ==============================================
-  `);
+    ==============================================
+    MAILFLOW PRO BACKEND STARTED
+    Port: ${PORT}
+    Status: READY FOR RELAY
+    ==============================================
+    `);
 });

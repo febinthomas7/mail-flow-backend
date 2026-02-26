@@ -11,10 +11,16 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-ses": "^3.996.0",
+    "axios": "^1.13.5",
     "cors": "^2.8.6",
+    "crypto": "^1.0.1",
     "deep-email-validator": "^0.1.21",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "nodemailer": "^7.0.13"
+    "form-data": "^4.0.5",
+    "handlebars": "^4.7.8",
+    "nodemailer": "^7.0.13",
+    "p-limit": "^3.1.0"
   }
 }
