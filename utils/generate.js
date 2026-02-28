@@ -1,33 +1,68 @@
 const axios = require("axios");
 const FormData = require("form-data");
 const handlebars = require("handlebars");
+const { Cluster } = require("puppeteer-cluster");
 
-//  Using Internal Private IPs for both servers ---
-const EASY_PDF_SERVER_URL = process.env.EASY_PDF_URL;
 const PDFREST_URL = process.env.PDFREST_URL;
 
-// Caches compiled Handlebars templates to reduce CPU usage by 99%
+// --- Template Cache ---
 const templateCache = {};
 
-/**
- * 1. DYNAMIC INJECTION: Replaces {{tags}} with actual data
- */
-const injectData = (htmlTemplate, data) => {
+const injectData = (htmlTemplate, data, textBody) => {
+  if (!htmlTemplate) return "";
   if (!templateCache[htmlTemplate]) {
     templateCache[htmlTemplate] = handlebars.compile(htmlTemplate);
   }
   return templateCache[htmlTemplate](data);
 };
 
-// Creates a dedicated client with a strict 15-second timeout
-const apiClient = axios.create({
-  timeout: 15000,
-});
+// --- Puppeteer Cluster Initialization ---
+let cluster;
 
-/**
- * Exponential Backoff Retry Wrapper
- * Protects against random network drops and temporary server overload.
- */
+(async () => {
+  try {
+    cluster = await Cluster.launch({
+      concurrency: Cluster.CONCURRENCY_PAGE,
+      // Match this to your p-limit(10) in the email file
+      maxConcurrency: 10,
+      puppeteerOptions: {
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage", // Prevents EC2 memory crashes
+          "--disable-gpu",
+        ],
+      },
+    });
+
+    // Define the Cluster Task: What a tab does when given HTML
+    await cluster.task(async ({ page, data: { htmlContent, format } }) => {
+      await page.setContent(htmlContent, { waitUntil: "networkidle0" });
+
+      if (format === "pdf") {
+        return await page.pdf({
+          format: "A4",
+          printBackground: true,
+          margin: { top: "20px", right: "20px", bottom: "20px", left: "20px" },
+        });
+      } else if (format === "jpg" || format === "png") {
+        return await page.screenshot({
+          type: format === "jpg" ? "jpeg" : "png",
+          fullPage: true,
+        });
+      }
+    });
+
+    console.log("🛡️ Puppeteer Cluster Ready: Serving internal PDFs/Images.");
+  } catch (err) {
+    console.error("Failed to launch Puppeteer Cluster:", err);
+  }
+})();
+
+// --- Dedicated API Client ---
+const apiClient = axios.create({ timeout: 15000 });
+
 const withRetry = async (fn, retries = 3, delayMs = 1000) => {
   try {
     return await fn();
@@ -41,62 +76,40 @@ const withRetry = async (fn, retries = 3, delayMs = 1000) => {
     if (retries === 0 || (isClientError && !isRateLimit)) {
       throw error;
     }
-
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     return withRetry(fn, retries - 1, delayMs * 2);
   }
 };
 
 /**
- * 2. GENERATION: Calls Internal Marketplace APIs for PDF/JPG/DOCX
+ * 2. GENERATION: Calls Puppeteer internally, or PDFREST for DOCX
  */
 async function generateBuffer(htmlContent, format) {
-  // return withRetry(async () => {
+  if (!htmlContent) return null;
 
-  // });
   try {
-    // --- SERVER 1: Easy PDF (Internal VPC) ---
+    // --- SERVER 1: Internal Puppeteer (Replaces Easy PDF) ---
     if (["pdf", "jpg", "png"].includes(format)) {
-      const endpoint = format === "pdf" ? "/make-pdf" : "/render/image";
-      console.log(EASY_PDF_SERVER_URL + endpoint);
-      const response = await apiClient.post(
-        `${process.env.EASY_PDF_URL}${endpoint}`,
-        {
-          html: htmlContent, // Make sure this is a string
-          options: {
-            format: "A4",
-            quality: 100,
-          },
-        },
-        {
-          responseType: "arraybuffer",
-          headers: {
-            "Content-Type": "application/json", // Explicitly set this
-          },
-        },
-      );
-      return response.data;
+      if (!cluster) throw new Error("Puppeteer cluster is still booting up.");
+
+      // Push the HTML and format to the queue and wait for the buffer
+      const buffer = await cluster.execute({ htmlContent, format });
+      return buffer;
     }
 
-    // --- SERVER 2: pdfRest (Internal VPC) ---
-    if (format === "docx") {
-      // STEP 1: Convert HTML to PDF
+    // --- SERVER 2: pdfRest (Internal VPC for DOCX) ---
+    if (format === "docx" || format === "word") {
       const pdfForm = new FormData();
       pdfForm.append("file", Buffer.from(htmlContent), {
         filename: "file.html",
         contentType: "text/html",
       });
 
-      const pdfResponse = await apiClient.post(
-        `${PDFREST_URL}/pdf-with-html`,
-        pdfForm,
-        {
-          headers: { ...pdfForm.getHeaders() }, // Notice: No API Key needed for internal AMI
-          responseType: "arraybuffer",
-        },
-      );
+      const pdfResponse = await apiClient.post(`${PDFREST_URL}/pdf`, pdfForm, {
+        headers: { ...pdfForm.getHeaders() },
+        responseType: "arraybuffer",
+      });
 
-      // STEP 2: Convert the new PDF into a Word Document (DOCX)
       const wordForm = new FormData();
       wordForm.append("file", Buffer.from(pdfResponse.data), {
         filename: "temp.pdf",
@@ -104,7 +117,7 @@ async function generateBuffer(htmlContent, format) {
       });
 
       const wordResponse = await apiClient.post(
-        `${PDFREST_URL}/pdf-to-word`,
+        `${PDFREST_URL}/word`,
         wordForm,
         {
           headers: { ...wordForm.getHeaders() },
@@ -117,11 +130,8 @@ async function generateBuffer(htmlContent, format) {
 
     throw new Error(`Unsupported format requested: ${format}`);
   } catch (error) {
-    console.log(error);
-    // Enhanced error tracking
-    const statusCode = error.response
-      ? error.response.status
-      : "Network/Timeout";
+    console.error("Generation Error:", error.message || error);
+    const statusCode = error.response ? error.response.status : "Internal";
     throw new Error(
       `Cloud Generation Failed [HTTP ${statusCode}]: ${error.message}`,
     );

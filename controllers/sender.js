@@ -35,7 +35,8 @@ const getTransporter = (smtp) => {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const sendSingleEmail = async (recipient, index, payload) => {
-  const { smtpConfigs, subjects, senderNames, generationOptions } = payload;
+  const { smtpConfigs, subjects, senderNames, textBody, generationOptions } =
+    payload;
 
   // 1. ROTATION LOGIC
   const currentSmtp = smtpConfigs[index % smtpConfigs.length];
@@ -54,7 +55,6 @@ const sendSingleEmail = async (recipient, index, payload) => {
     });
 
     const finalHtml = injectData(generationOptions.html, enrichedData);
-    // let emailBody = finalHtml;
     let attachments = [];
 
     const personalizedSubject = injectData(currentSubject, enrichedData);
@@ -66,11 +66,26 @@ const sendSingleEmail = async (recipient, index, payload) => {
         finalHtml,
         generationOptions.format,
       );
-      attachments.push({
-        filename: `${enrichedData.invoice}.${generationOptions.format}`,
-        content: fileBuffer,
+      if (fileBuffer !== null) {
+        attachments.push({
+          filename: `${enrichedData.invoice}.${generationOptions.format}`,
+          content: fileBuffer,
+        });
+        emailBody = "Please find your document attached.";
+      }
+    }
+
+    if (
+      generationOptions.directFiles &&
+      Array.isArray(generationOptions.directFiles)
+    ) {
+      generationOptions.directFiles.forEach((file) => {
+        attachments.push({
+          filename: file.name,
+          content: file.base64.split(",")[1], // Extract actual base64 data
+          encoding: "base64",
+        });
       });
-      emailBody = "Please find your document attached.";
     }
 
     // 4. SENDING
@@ -78,8 +93,8 @@ const sendSingleEmail = async (recipient, index, payload) => {
       from: `"${currentSenderName}" <${currentSmtp.email}>`,
       to: recipient.email,
       subject: personalizedSubject,
-      text: personalizedBody,
-      html: finalHtml,
+      text: textBody ? personalizedBody : "",
+      html: textBody ? "" : finalHtml,
       attachments: attachments,
     });
 

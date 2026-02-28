@@ -37,35 +37,35 @@ app.post("/api/send", (req, res) => {
   });
 });
 
-// const http = require('http'); // Changed from https
-// const fs = require('fs');
+// const http = require("http"); // Changed from https
+// const fs = require("fs");
 
 // const data = JSON.stringify({
-//     html: '<h1>MedLock AWS Test</h1>',
+//   html: "<h1>MedLock AWS Test</h1>",
 // });
 
 // const options = {
-//     hostname: '54.234.217.28', // Your Public IP
-//     port: 80,                  // Standard Port
-//     path: '/make-pdf',
-//     method: 'POST',
-//     headers: {
-//         'Content-Type': 'application/json',
-//         'Content-Length': Buffer.byteLength(data),
-//     },
+//   hostname: "3.88.199.32", // Your Public IP
+//   port: 80, // Standard Port
+//   path: "/make-pdf",
+//   method: "POST",
+//   headers: {
+//     "Content-Type": "application/json",
+//     "Content-Length": Buffer.byteLength(data),
+//   },
 // };
 
-// const req = http.request(options, res => {
-//     let body = Buffer.alloc(0);
-//     res.on('data', chunk => body = Buffer.concat([body, chunk]));
-//     res.on('end', () => {
-//         fs.writeFile('medlock_test.pdf', body, (err) => {
-//             if (!err) console.log("File saved successfully!");
-//         });
+// const req = http.request(options, (res) => {
+//   let body = Buffer.alloc(0);
+//   res.on("data", (chunk) => (body = Buffer.concat([body, chunk])));
+//   res.on("end", () => {
+//     fs.writeFile("medlock_test.pdf", body, (err) => {
+//       if (!err) console.log("File saved successfully!");
 //     });
+//   });
 // });
 
-// req.on('error', console.error);
+// req.on("error", console.error);
 // req.write(data);
 // req.end();
 
