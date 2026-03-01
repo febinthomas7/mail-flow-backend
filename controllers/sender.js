@@ -4,7 +4,7 @@ const { injectData, generateBuffer } = require("../utils/generate");
 const { createTags } = require("../utils/tags");
 
 // Keep concurrency at 10 to avoid socket saturation
-const limit = pLimit(10);
+const limit = pLimit(25);
 
 // --- Transporter Cache ---
 // Reuses SMTP connections instead of logging in 20,000 times.
@@ -89,20 +89,31 @@ const sendSingleEmail = async (recipient, index, payload) => {
     }
 
     // 4. SENDING
-    const info = await transporter.sendMail({
-      from: `"${currentSenderName}" <${currentSmtp.email}>`,
-      to: recipient.email,
-      subject: personalizedSubject,
-      text: textBody ? personalizedBody : "",
-      html: textBody ? "" : finalHtml,
-      attachments: attachments,
-    });
+    // const info = await transporter.sendMail({
+    //   from: `"${currentSenderName}" <${currentSmtp.email}>`,
+    //   to: recipient.email,
+    //   subject: personalizedSubject,
+    //   text: textBody ? personalizedBody : "",
+    //   html: textBody ? "" : finalHtml,
+    //   attachments: attachments,
+    // });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    console.log(
+      `[MOCK] Success: ${recipient.email} | PDF Size: ${attachments[0]?.content.length || 0} bytes`,
+    );
 
     return {
       email: recipient.email,
       status: "sent",
-      messageId: info.messageId,
+      messageId: `mock-id-${Date.now()}-${index}`,
     };
+    // return {
+    //   email: recipient.email,
+    //   status: "sent",
+    //   messageId: info.messageId,
+    // };
   } catch (error) {
     return { email: recipient.email, status: "failed", error: error.message };
   }
@@ -110,50 +121,88 @@ const sendSingleEmail = async (recipient, index, payload) => {
 
 const sendEmail = async (req, res) => {
   const { targets, ...rest } = req.body;
+  const io = req.app.get("socketio"); // Get the IO instance we attached in index.js
 
   if (!targets || !Array.isArray(targets)) {
     return res
       .status(400)
       .json({ success: false, error: "Targets array is required." });
   }
-  // console.log(targets, rest);
 
-  // Instant response to prevent frontend timeout
+  // 1. Instant response to prevent frontend timeout
   res.status(202).json({
     success: true,
     message: "MedLock Dispatcher: Batch sequence started in background.",
     total: targets.length,
   });
 
+  // 2. Background Execution
   (async () => {
     try {
       console.log(
         `[RELAY] Launching blast for ${targets.length} recipients...`,
       );
+      const startTime = Date.now();
+      let totalProcessed = 0;
 
-      const chunkSize = 500;
+      const chunkSize = 500; // Smaller chunks = smoother UI updates
       for (let i = 0; i < targets.length; i += chunkSize) {
         const chunk = targets.slice(i, i + chunkSize);
 
         const tasks = chunk.map((recipient, chunkIndex) => {
-          return limit(() => sendSingleEmail(recipient, i + chunkIndex, rest));
+          return limit(async () => {
+            const globalIndex = i + chunkIndex;
+            // Calculate which sender node this belongs to for the UI
+            const senderIndex = globalIndex % rest.smtpConfigs.length;
+
+            const result = await sendSingleEmail(recipient, globalIndex, rest);
+
+            totalProcessed++;
+
+            // 3. EMIT TO FRONTEND every 10 emails (balance performance vs smoothness)
+            if (
+              totalProcessed % 10 === 0 ||
+              totalProcessed === targets.length
+            ) {
+              const elapsedMs = Date.now() - startTime;
+              const avgMs = elapsedMs / totalProcessed;
+              const remainingMins = (
+                ((targets.length - totalProcessed) * avgMs) /
+                60000
+              ).toFixed(1);
+
+              io.emit("batch_progress", {
+                processed: totalProcessed,
+                total: targets.length,
+                senderIndex: senderIndex, // Matches your frontend batchPlans idx
+                status: result.status,
+                lastEmail: recipient.email,
+                remainingMins: remainingMins,
+                percentage: ((totalProcessed / targets.length) * 100).toFixed(
+                  1,
+                ),
+              });
+            }
+            return result;
+          });
         });
 
-        const results = await Promise.allSettled(tasks);
-        console.log(results);
+        await Promise.allSettled(tasks);
 
-        // LOGGING PROGRESS
         console.log(
-          `[PROGRESS] Processed ${i + chunk.length} / ${targets.length}`,
+          `[PROGRESS] ${totalProcessed} / ${targets.length} complete.`,
         );
 
         if (i + chunkSize < targets.length) {
-          await delay(1000); // Breathe space for SMTP servers
+          await delay(500); // Small breather
         }
       }
+
       console.log(`[RELAY] Sequence complete.`);
+      io.emit("batch_complete", { total: targets.length });
     } catch (err) {
       console.error("[CRITICAL] Background job failure:", err.message);
+      io.emit("batch_error", { message: err.message });
     }
   })();
 };

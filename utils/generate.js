@@ -24,7 +24,7 @@ let cluster;
     cluster = await Cluster.launch({
       concurrency: Cluster.CONCURRENCY_PAGE,
       // Match this to your p-limit(10) in the email file
-      maxConcurrency: 10,
+      maxConcurrency: 15,
       puppeteerOptions: {
         headless: "new",
         args: [
@@ -32,6 +32,7 @@ let cluster;
           "--disable-setuid-sandbox",
           "--disable-dev-shm-usage", // Prevents EC2 memory crashes
           "--disable-gpu",
+          '--js-flags="--max-old-space-size=512"',
         ],
       },
     });
