@@ -60,7 +60,7 @@ exports.createTags = (frontendData) => {
     email: frontendData.email || "",
 
     // Generated Data
-    todayDate: todayDate,
+    date: todayDate,
     tomorrowDate: tomorrowDate,
     invoice: frontendData.invoice || generateInvoiceNo(), // Use provided or generate new
 
