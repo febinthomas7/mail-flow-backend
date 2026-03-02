@@ -23,7 +23,6 @@ const PORT = process.env.PORT || 3001;
 //   },
 // });
 const io = new Server(server, {
-  path: "/api/socket.io", // CRITICAL: This allows the proxy to find the socket
   cors: {
     origin: process.env.BASE_URL,
     methods: ["GET", "POST"],
