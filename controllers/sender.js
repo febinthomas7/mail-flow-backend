@@ -49,7 +49,6 @@ const sendSingleEmail = async (recipient, index, payload) => {
     const enrichedData = createTags({
       name: recipient?.name || "Valued Client",
       email: recipient?.email,
-      date,
       invoice: recipient?.invoice || `INV-${Date.now()}`,
       customData: recipient?.data || {},
     });
