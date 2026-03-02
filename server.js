@@ -15,12 +15,23 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 
 // Initialize Socket.io
+// const io = new Server(server, {
+//   cors: {
+//     origin: process.env.BASE_URL,
+//     methods: ["GET", "POST"],
+//     credentials: true, // 2. ALLOW COOKIES IN SOCKETS
+//   },
+// });
 const io = new Server(server, {
+  path: "/api/socket.io", // CRITICAL: This allows the proxy to find the socket
   cors: {
     origin: process.env.BASE_URL,
     methods: ["GET", "POST"],
-    credentials: true, // 2. ALLOW COOKIES IN SOCKETS
+    credentials: true,
   },
+  // Adding these helps stabilize the connection through proxies
+  transports: ["polling", "websocket"],
+  allowEIO3: true,
 });
 
 app.use(cookieParser()); // 3. USE IT HERE (Before routes)
