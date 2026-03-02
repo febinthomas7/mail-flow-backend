@@ -4,6 +4,7 @@ const {
 } = require("@aws-sdk/client-ses");
 const nodemailer = require("nodemailer");
 const pLimit = require("p-limit"); // --- NEW: Required for socket control
+const verifier = require("email-verify");
 
 // Initialize SES Client
 const sesClient = new SESClient({
@@ -26,18 +27,16 @@ const verifySmtpBatch = async (req, res) => {
   const { configs } = req.body;
 
   if (!configs || !Array.isArray(configs)) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        error: "Provide an array of SMTP configurations.",
-      });
+    return res.status(400).json({
+      success: false,
+      error: "Provide an array of SMTP configurations.",
+    });
   }
 
   // Function to verify a single transporter
   const checkSingleSmtp = async (config) => {
     const transporter = nodemailer.createTransport({
-      host: config.host,
+      host: "smtp.gmail.com",
       port: config.port || 587,
       secure: config.port === 465,
       auth: { user: config.username, pass: config.password },
@@ -79,47 +78,53 @@ const verifySmtpBatch = async (req, res) => {
  * 2. Amazon SES Identity Verification Check
  * Checks if the provided emails/domains are verified in your AWS SES account.
  */
-const verifyTargetWithSES = async (req, res) => {
-  const { emails } = req.body;
 
-  if (!emails || !Array.isArray(emails)) {
+const verifyTargetReal = async (req, res) => {
+  const { email } = req.body;
+
+  if (!email || !Array.isArray(email)) {
     return res
       .status(400)
       .json({ success: false, error: "Emails array is required." });
   }
 
-  try {
-    // --- UPDATED: AWS API Limit Handling ---
-    // AWS strictly limits 'Identities' to 100 items per request.
-    const CHUNK_SIZE = 100;
-    let allVerificationData = {};
+  // 1. Extract email strings
+  const emailStrings = email.map((item) =>
+    typeof item === "string" ? item : item.email,
+  );
 
-    // Loop through the array 100 items at a time
-    for (let i = 0; i < emails.length; i += CHUNK_SIZE) {
-      const chunk = emails.slice(i, i + CHUNK_SIZE);
-      const params = { Identities: chunk };
-
-      const command = new GetIdentityVerificationAttributesCommand(params);
-      const response = await sesClient.send(command);
-
-      // Merge the chunk's results into our master object
-      allVerificationData = {
-        ...allVerificationData,
-        ...response.VerificationAttributes,
-      };
-    }
-
-    res.status(200).json({
-      success: true,
-      verificationData: allVerificationData,
+  // 2. Wrap the callback-based library in a Promise
+  const checkEmailReal = (addr) => {
+    return new Promise((resolve) => {
+      verifier.verify(addr, (err, info) => {
+        if (err) {
+          resolve({ email: addr, status: "invalid", msg: "Server Error" });
+        } else if (info.success) {
+          resolve({ email: addr, status: "valid", msg: "Real / Deliverable" });
+        } else {
+          // info.info contains the specific reason (e.g., "mailbox not found")
+          resolve({
+            email: addr,
+            status: "invalid",
+            msg: info.info || "Invalid Mailbox",
+          });
+        }
+      });
     });
+  };
+
+  try {
+    // 3. Process in parallel (Limit this if the list is very large > 50)
+    const results = await Promise.all(emailStrings.map(checkEmailReal));
+
+    res.json({ success: true, results });
   } catch (error) {
-    console.error("[SES_VERIFY_ERROR]", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Verification Error:", error);
+    res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
 module.exports = {
   verifySmtpBatch,
-  verifyTargetWithSES,
+  verifyTargetReal,
 };

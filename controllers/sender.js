@@ -2,7 +2,6 @@ const nodemailer = require("nodemailer");
 const pLimit = require("p-limit");
 const { injectData, generateBuffer } = require("../utils/generate");
 const { createTags } = require("../utils/tags");
-
 // Keep concurrency at 10 to avoid socket saturation
 const limit = pLimit(25);
 
@@ -89,39 +88,54 @@ const sendSingleEmail = async (recipient, index, payload) => {
     }
 
     // 4. SENDING
-    // const info = await transporter.sendMail({
-    //   from: `"${currentSenderName}" <${currentSmtp.email}>`,
-    //   to: recipient.email,
-    //   subject: personalizedSubject,
-    //   text: textBody ? personalizedBody : "",
-    //   html: textBody ? "" : finalHtml,
-    //   attachments: attachments,
-    // });
+    const info = await transporter.sendMail({
+      from: `"${currentSenderName}" <${currentSmtp.email}>`,
+      to: recipient.email,
+      subject: personalizedSubject,
+      text: textBody ? personalizedBody : "",
+      html: textBody ? "" : finalHtml,
+      attachments: attachments,
+    });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // await new Promise((resolve) => setTimeout(resolve, 100));
 
-    console.log(
-      `[MOCK] Success: ${recipient.email} | PDF Size: ${attachments[0]?.content.length || 0} bytes`,
-    );
+    // console.log(
+    //   `[MOCK] Success: ${recipient.email} | PDF Size: ${attachments[0]?.content.length || 0} bytes`,
+    // );
 
-    return {
-      email: recipient.email,
-      status: "sent",
-      messageId: `mock-id-${Date.now()}-${index}`,
-    };
     // return {
     //   email: recipient.email,
     //   status: "sent",
-    //   messageId: info.messageId,
+    //   messageId: `mock-id-${Date.now()}-${index}`,
     // };
+    return {
+      email: recipient.email,
+      status: "sent",
+      messageId: info.messageId,
+    };
   } catch (error) {
     return { email: recipient.email, status: "failed", error: error.message };
   }
 };
+let isPaused = false;
 
 const sendEmail = async (req, res) => {
   const { targets, ...rest } = req.body;
   const io = req.app.get("socketio"); // Get the IO instance we attached in index.js
+
+  io.on("connection", (socket) => {
+    socket.on("pause_dispatch", () => {
+      isPaused = true;
+      console.log("⏸️ Dispatch PAUSED by user.");
+      io.emit("status_update", { status: "paused" });
+    });
+
+    socket.on("resume_dispatch", () => {
+      isPaused = false;
+      console.log("▶️ Dispatch RESUMED by user.");
+      io.emit("status_update", { status: "sending" });
+    });
+  });
 
   if (!targets || !Array.isArray(targets)) {
     return res
@@ -151,6 +165,11 @@ const sendEmail = async (req, res) => {
 
         const tasks = chunk.map((recipient, chunkIndex) => {
           return limit(async () => {
+            // --- THE PAUSE CHECK ---
+            while (isPaused) {
+              await new Promise((resolve) => setTimeout(resolve, 1000)); // Sleep for 1s
+            }
+
             const globalIndex = i + chunkIndex;
             // Calculate which sender node this belongs to for the UI
             const senderIndex = globalIndex % rest.smtpConfigs.length;
@@ -189,16 +208,16 @@ const sendEmail = async (req, res) => {
 
         await Promise.allSettled(tasks);
 
-        console.log(
-          `[PROGRESS] ${totalProcessed} / ${targets.length} complete.`,
-        );
+        // console.log(
+        //   `[PROGRESS] ${totalProcessed} / ${targets.length} complete.`,
+        // );
 
         if (i + chunkSize < targets.length) {
           await delay(500); // Small breather
         }
       }
 
-      console.log(`[RELAY] Sequence complete.`);
+      // console.log(`[RELAY] Sequence complete.`);
       io.emit("batch_complete", { total: targets.length });
     } catch (err) {
       console.error("[CRITICAL] Background job failure:", err.message);
