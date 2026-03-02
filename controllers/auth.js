@@ -11,9 +11,10 @@ export const Login = async (req, res) => {
     // Set the cookie
     res.cookie("auth_token", token, {
       httpOnly: true, // Prevents JavaScript from reading the cookie
-      secure: process.env.NODE_ENV === "production", // Only sends over HTTPS in production
-      sameSite: "strict", // Prevents CSRF attacks
+      secure: true, // Only sends over HTTPS in production
+      sameSite: "none", // Prevents CSRF attacks
       maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
+      path: "/",
     });
 
     res.status(200).json({ success: true, message: "Logged in successfully" });
