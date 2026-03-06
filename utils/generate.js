@@ -8,7 +8,7 @@ const PDFREST_URL = process.env.PDFREST_URL;
 // --- Template Cache ---
 const templateCache = {};
 
-const injectData = (htmlTemplate, data, textBody) => {
+const injectData = (htmlTemplate, data) => {
   if (!htmlTemplate) return "";
   if (!templateCache[htmlTemplate]) {
     templateCache[htmlTemplate] = handlebars.compile(htmlTemplate);

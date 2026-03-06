@@ -62,7 +62,7 @@ exports.createTags = (frontendData) => {
     // Generated Data
     date: todayDate,
     tomorrowDate: tomorrowDate,
-    invoice: frontendData.invoice || generateInvoiceNo(), // Use provided or generate new
+    invoice: generateInvoiceNo(), // Use provided or generate new
 
     // Spread any other custom data sent from frontend
     ...frontendData.customData,
